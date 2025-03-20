@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { Avatar, Text, Caption1, Divider } from "@fluentui/react-components"
-import type { TranscriptEntry } from "@/types"
 import { WebViewCommunicator } from "@/utils/webview-communicator"
+import type { TranscriptEntry, TranscriptionEntryData } from "@/types"
 
 // Sample transcript data
 const sampleTranscript: TranscriptEntry[] = [
@@ -36,12 +36,12 @@ export default function TranscriptView({ isRecording }: TranscriptViewProps) {
 
   useEffect(() => {
     // Register for transcription updates from the WPF host
-    WebViewCommunicator.onReceiveTranscription((transcriptionData) => {
-      if (transcriptionData && transcriptionData.entries) {
+    WebViewCommunicator.onReceiveTranscription((transcriptionData: TranscriptionEntryData[]) => {
+      if (transcriptionData && transcriptionData.length > 0) {
         // Add new transcription entries
         setTranscript((prev) => {
           // Create new entries with proper IDs
-          const newEntries = transcriptionData.entries.map((entry: any, index: number) => ({
+          const newEntries: TranscriptEntry[] = transcriptionData.map((entry, index) => ({
             id: prev.length + index + 1,
             speaker: {
               name: entry.speakerName || "Unknown Speaker",

@@ -7,6 +7,7 @@ import MeetingHeader from "@/components/meeting-header"
 import CurrentMeetingView from "@/components/current-meeting-view"
 import RecordingHistoryView from "@/components/recording-history-view"
 import { WebViewCommunicator } from "@/utils/webview-communicator"
+import type { TranscriptionEntryData } from "@/types"
 
 export default function Home() {
   const [isRecording, setIsRecording] = useState(false)
@@ -18,7 +19,7 @@ export default function Home() {
     WebViewCommunicator.initialize()
 
     // Listen for transcription data from the WPF host
-    WebViewCommunicator.onReceiveTranscription((transcriptionData) => {
+    WebViewCommunicator.onReceiveTranscription((transcriptionData: TranscriptionEntryData[]) => {
       console.log("Received transcription data:", transcriptionData)
       // Handle transcription data here
     })

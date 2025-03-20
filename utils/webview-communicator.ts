@@ -1,8 +1,23 @@
+import type {
+  WebViewMessage,
+  RecordingStateMessage,
+  AppReadyMessage,
+  TranscriptionDataMessage,
+  TranscriptionEntryData,
+} from "@/types"
+
+/**
+ * Type guard to check if a message is a TranscriptionDataMessage
+ */
+function isTranscriptionDataMessage(message: WebViewMessage): message is TranscriptionDataMessage {
+  return message.type === "TRANSCRIPTION_DATA" && message.data && Array.isArray(message.data.entries)
+}
+
 /**
  * Utility for communication between the React app and the WebView2 host
  */
 export class WebViewCommunicator {
-  private static transcriptionCallback: ((data: any) => void) | null = null
+  private static transcriptionCallback: ((data: TranscriptionEntryData[]) => void) | null = null
 
   /**
    * Initialize communication with the WebView2 host
@@ -12,12 +27,12 @@ export class WebViewCommunicator {
     window.addEventListener("message", this.handleHostMessage)
 
     // Notify the host that the web app is ready
-    this.sendMessageToHost({ type: "APP_READY" })
+    this.sendMessageToHost({ type: "APP_READY" } as AppReadyMessage)
 
     // Add a global function that the host can call directly
     ;(window as any).receiveTranscriptionFromHost = (transcriptionData: string) => {
       try {
-        const parsedData = JSON.parse(transcriptionData)
+        const parsedData = JSON.parse(transcriptionData) as TranscriptionEntryData[]
         if (this.transcriptionCallback) {
           this.transcriptionCallback(parsedData)
         }
@@ -38,7 +53,7 @@ export class WebViewCommunicator {
    * Handle messages from the WebView2 host
    */
   private static handleHostMessage(event: MessageEvent): void {
-    const message = event.data
+    const message = event.data as WebViewMessage
 
     if (typeof message !== "object" || message === null) {
       return
@@ -46,8 +61,8 @@ export class WebViewCommunicator {
 
     switch (message.type) {
       case "TRANSCRIPTION_DATA":
-        if (WebViewCommunicator.transcriptionCallback) {
-          WebViewCommunicator.transcriptionCallback(message.data)
+        if (isTranscriptionDataMessage(message) && WebViewCommunicator.transcriptionCallback) {
+          WebViewCommunicator.transcriptionCallback(message.data.entries)
         }
         break
 
@@ -61,7 +76,7 @@ export class WebViewCommunicator {
   /**
    * Send a message to the WebView2 host
    */
-  private static sendMessageToHost(message: any): void {
+  private static sendMessageToHost(message: WebViewMessage): void {
     // Check if we're running in a WebView2 environment
     if (window.chrome && (window.chrome as any).webview) {
       // Use the WebView2-specific postMessage API
@@ -76,16 +91,17 @@ export class WebViewCommunicator {
    * Notify the host when recording state changes
    */
   static notifyRecordingStateChanged(isRecording: boolean): void {
-    this.sendMessageToHost({
+    const message: RecordingStateMessage = {
       type: "RECORDING_STATE_CHANGED",
       data: { isRecording },
-    })
+    }
+    this.sendMessageToHost(message)
   }
 
   /**
    * Register a callback to receive transcription data
    */
-  static onReceiveTranscription(callback: (data: any) => void): void {
+  static onReceiveTranscription(callback: (data: TranscriptionEntryData[]) => void): void {
     this.transcriptionCallback = callback
   }
 }
