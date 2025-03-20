@@ -1,7 +1,8 @@
 "use client"
 
-import { Text, Button, Subtitle1, Badge } from "@fluentui/react-components"
-import { RecordRegular } from "@fluentui/react-icons"
+import { useState } from "react"
+import { Text, Button, Subtitle1, Badge, Tooltip } from "@fluentui/react-components"
+import { RecordRegular, ChevronRightRegular, ChevronLeftRegular } from "@fluentui/react-icons"
 import ParticipantsList from "@/components/participants-list"
 import TranscriptView from "@/components/transcript-view"
 
@@ -11,10 +12,24 @@ interface CurrentMeetingViewProps {
 }
 
 export default function CurrentMeetingView({ isRecording, toggleRecording }: CurrentMeetingViewProps) {
+  const [showParticipants, setShowParticipants] = useState(true)
+
+  const toggleParticipantsPanel = () => {
+    setShowParticipants((prev) => !prev)
+  }
+
   return (
     <>
       {/* Transcript area */}
-      <div style={{ flex: 1, padding: "16px", overflowY: "auto" }}>
+      <div
+        style={{
+          flex: 1,
+          padding: "16px",
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         {isRecording ? (
           <>
             <div
@@ -24,9 +39,25 @@ export default function CurrentMeetingView({ isRecording, toggleRecording }: Cur
                 backgroundColor: "#FEF6F6",
                 borderRadius: "4px",
                 marginBottom: "16px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
               }}
             >
-              <Text style={{ color: "#BC2F32" }}>● Recording in progress</Text>
+              <div style={{ flex: 1 }}></div>
+              <Text style={{ color: "#BC2F32", flex: 1, textAlign: "center" }}>● Recording in progress</Text>
+              <div style={{ flex: 1, textAlign: "right" }}>
+                {isRecording && (
+                  <Tooltip content={showParticipants ? "Hide participants" : "Show participants"} relationship="label">
+                    <Button
+                      icon={showParticipants ? <ChevronRightRegular /> : <ChevronLeftRegular />}
+                      appearance="subtle"
+                      onClick={toggleParticipantsPanel}
+                      aria-label={showParticipants ? "Hide participants" : "Show participants"}
+                    />
+                  </Tooltip>
+                )}
+              </div>
             </div>
             <TranscriptView isRecording={isRecording} />
           </>
@@ -35,16 +66,25 @@ export default function CurrentMeetingView({ isRecording, toggleRecording }: Cur
         )}
       </div>
 
-      {/* Participants sidebar */}
-      <div style={{ width: "250px", borderLeft: "1px solid #e0e0e0", padding: "16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-          <Subtitle1>Participants</Subtitle1>
-          <Badge appearance="filled" shape="rounded" color="informative">
-            5
-          </Badge>
+      {/* Participants sidebar - only show when recording and showParticipants is true */}
+      {isRecording && showParticipants && (
+        <div
+          style={{
+            width: "250px",
+            borderLeft: "1px solid #e0e0e0",
+            padding: "16px",
+            transition: "width 0.3s ease-in-out",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+            <Subtitle1>Participants</Subtitle1>
+            <Badge appearance="filled" shape="rounded" color="informative">
+              5
+            </Badge>
+          </div>
+          <ParticipantsList />
         </div>
-        <ParticipantsList />
-      </div>
+      )}
     </>
   )
 }

@@ -59,7 +59,8 @@
     "vaul": "^0.9.6",
     "zod": "^3.24.1",
     "@fluentui/react-components": "latest",
-    "@fluentui/react-icons": "latest"
+    "@fluentui/react-icons": "latest",
+    "@fluentui/react-list-preview": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",

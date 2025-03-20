@@ -1,7 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { Avatar, Text, Caption1, Button, Input, Divider, Card, CardHeader } from "@fluentui/react-components"
+import { Avatar, Text, Caption1, Button, Input, Divider } from "@fluentui/react-components"
+import { List, ListItem } from "@fluentui/react-list-preview"
 import { MicOffRegular, EditRegular, SearchRegular, DismissRegular } from "@fluentui/react-icons"
 import { knownUsers, initialParticipants } from "@/data/participants"
 import type { KnownUser, Participant } from "@/types"
@@ -54,19 +55,9 @@ export default function ParticipantsList() {
 
   return (
     <div style={{ position: "relative", height: "100%" }}>
-      {/* Using div elements instead of List/ListItem */}
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <List>
         {participants.map((participant) => (
-          <div
-            key={participant.id}
-            style={{
-              padding: "8px",
-              borderRadius: "4px",
-              backgroundColor: "transparent",
-              transition: "background-color 0.2s",
-              cursor: "default",
-            }}
-          >
+          <ListItem key={participant.id} style={{ padding: "8px 0" }}>
             <div style={{ display: "flex", alignItems: "center", width: "100%" }}>
               <div style={{ position: "relative" }}>
                 <Avatar
@@ -108,9 +99,9 @@ export default function ParticipantsList() {
               </div>
               {participant.isMuted && <MicOffRegular style={{ color: "#707070" }} />}
             </div>
-          </div>
+          </ListItem>
         ))}
-      </div>
+      </List>
 
       {/* Custom slide-in panel instead of Dialog */}
       {showAssignPanel && (
@@ -152,34 +143,31 @@ export default function ParticipantsList() {
 
           <div style={{ flex: 1, overflowY: "auto" }}>
             {filteredUsers.map((user) => (
-              <Card
+              <div
                 key={user.id}
-                appearance="outline"
                 style={{
-                  marginBottom: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "12px",
+                  borderRadius: "4px",
                   cursor: "pointer",
-                  padding: "8px",
+                  marginBottom: "8px",
+                  backgroundColor: "#f5f5f5",
                 }}
                 onClick={() => handleAssignUser(user)}
               >
-                <CardHeader
-                  header={
-                    <div style={{ display: "flex", alignItems: "center" }}>
-                      <Avatar
-                        name={user.name}
-                        initials={user.initials}
-                        color="colorful"
-                        style={{ backgroundColor: user.color }}
-                        size={32}
-                      />
-                      <div style={{ marginLeft: "12px" }}>
-                        <Text>{user.name}</Text>
-                        <Caption1>{user.role}</Caption1>
-                      </div>
-                    </div>
-                  }
+                <Avatar
+                  name={user.name}
+                  initials={user.initials}
+                  color="colorful"
+                  style={{ backgroundColor: user.color }}
+                  size={32}
                 />
-              </Card>
+                <div style={{ marginLeft: "12px" }}>
+                  <Text>{user.name}</Text>
+                  <Caption1>{user.role}</Caption1>
+                </div>
+              </div>
             ))}
             {filteredUsers.length === 0 && (
               <Text align="center" style={{ display: "block", padding: "16px" }}>
