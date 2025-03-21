@@ -5,24 +5,78 @@ using System.Windows;
 using System.Windows.Input;
 using System.IO;
 using System.Threading.Tasks;
-using System.Speech.Recognition;
+using Microsoft.CognitiveServices.Speech;
+using Microsoft.CognitiveServices.Speech.Audio;
 using NAudio.Wave;
+using NAudio.CoreAudioApi;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Threading;
+using System.Linq;
+using System.Windows.Forms;
 
 namespace MeetingTranscriptionApp
 {
     public partial class MainWindow : Window
     {
         private bool isRecording = false;
-        private SpeechRecognitionEngine recognizer;
-        private WaveInEvent waveIn;
-        private List<TranscriptionEntry> currentTranscription = new List<TranscriptionEntry>();
+        private ObservableCollection<TranscriptionEntry> currentTranscription = new ObservableCollection<TranscriptionEntry>();
+        
+        // Azure Speech config
+        private SpeechConfig speechConfig;
+        
+        // Audio services
+        private AudioDeviceManager audioDeviceManager;
+        private MicrophoneService microphoneService;
+        private SpeakerService speakerService;
+        
+        // Cancellation tokens for async operations
+        private CancellationTokenSource micCts;
+        private CancellationTokenSource speakerCts;
+        
+        // Audio source enabled states
+        private bool microphoneEnabled = true;
+        private bool speakerEnabled = true;
 
         public MainWindow()
         {
             InitializeComponent();
             InitializeWebView();
-            InitializeSpeechRecognition();
+            
+            // Initialize audio device manager
+            audioDeviceManager = new AudioDeviceManager();
+            
+            // Initialize Azure Speech Services when the window is loaded
+            Loaded += async (s, e) => {
+                await InitializeSpeechServicesAsync();
+                PositionWindowOnStartup();
+            };
+        }
+
+        private void PositionWindowOnStartup()
+        {
+            try
+            {
+                // Get the screen working area (excludes taskbar)
+                var screen = Screen.PrimaryScreen;
+                var workingArea = screen.WorkingArea;
+                
+                // Set window width to 1/3 of screen width
+                double windowWidth = workingArea.Width / 3;
+                
+                // Position window on the right side of the screen
+                Left = workingArea.Right - windowWidth;
+                Top = workingArea.Top;
+                Width = windowWidth;
+                Height = workingArea.Height;
+                
+                // Ensure window is visible
+                WindowState = WindowState.Normal;
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error positioning window: {ex.Message}";
+            }
         }
 
         private async void InitializeWebView()
@@ -57,77 +111,139 @@ namespace MeetingTranscriptionApp
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to initialize WebView2: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.MessageBox.Show($"Failed to initialize WebView2: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 StatusText.Text = "WebView2 initialization failed";
             }
         }
 
-        private void InitializeSpeechRecognition()
+        private async Task InitializeSpeechServicesAsync()
         {
             try
             {
-                // Create a speech recognition engine
-                recognizer = new SpeechRecognitionEngine();
+                // Initialize Azure Speech Services
+                // In a real app, these would be stored securely and not hardcoded
+                string speechKey = Environment.GetEnvironmentVariable("AZURE_SPEECH_KEY") ?? "YOUR_AZURE_SPEECH_KEY";
+                string speechRegion = Environment.GetEnvironmentVariable("AZURE_SPEECH_REGION") ?? "eastus";
                 
-                // Configure the recognizer
-                var grammar = new DictationGrammar();
-                recognizer.LoadGrammar(grammar);
+                // Create speech configuration
+                speechConfig = SpeechConfig.FromSubscription(speechKey, speechRegion);
+                speechConfig.SpeechRecognitionLanguage = "en-US";
                 
-                // Set up event handlers
-                recognizer.SpeechRecognized += Recognizer_SpeechRecognized;
-                recognizer.SpeechHypothesized += Recognizer_SpeechHypothesized;
+                // Initialize audio services
+                await InitializeAudioServicesAsync();
                 
-                // Configure audio input
-                waveIn = new WaveInEvent
-                {
-                    DeviceNumber = 0, // Default microphone
-                    WaveFormat = new WaveFormat(16000, 1) // 16kHz mono
-                };
-                
-                waveIn.DataAvailable += WaveIn_DataAvailable;
-                
-                StatusText.Text = "Speech recognition initialized";
+                StatusText.Text = "Speech services initialized";
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to initialize speech recognition: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                StatusText.Text = "Speech recognition initialization failed";
+                System.Windows.MessageBox.Show($"Failed to initialize speech services: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusText.Text = "Speech services initialization failed";
             }
         }
 
-        private void WaveIn_DataAvailable(object sender, WaveInEventArgs e)
+        private async Task InitializeAudioServicesAsync()
         {
-            if (recognizer != null && isRecording)
+            try
             {
-                // Feed audio data to the recognizer
-                recognizer.SetInputToWaveStream(new MemoryStream(e.Buffer, 0, e.BytesRecorded));
-                recognizer.Recognize();
-            }
-        }
-
-        private void Recognizer_SpeechRecognized(object sender, SpeechRecognizedEventArgs e)
-        {
-            if (isRecording && e.Result.Confidence > 0.3)
-            {
-                var entry = new TranscriptionEntry
-                {
-                    SpeakerName = "Current Speaker", // This would be determined by speaker diarization
-                    SpeakerInitials = "CS",
-                    SpeakerColor = "#4F6BED",
-                    Text = e.Result.Text,
-                    Timestamp = DateTime.Now.ToString("h:mm:ss tt")
-                };
+                // Initialize audio device manager and get devices
+                await audioDeviceManager.InitializeAsync();
                 
-                currentTranscription.Add(entry);
+                // Initialize microphone service
+                microphoneService = new MicrophoneService(speechConfig);
+                microphoneService.TranscriptionReceived += OnTranscriptionReceived;
+                
+                // Initialize speaker service
+                speakerService = new SpeakerService(speechConfig);
+                speakerService.TranscriptionReceived += OnTranscriptionReceived;
+                
+                // Set default devices
+                var defaultMic = audioDeviceManager.GetDefaultMicrophone();
+                var defaultSpeaker = audioDeviceManager.GetDefaultSpeaker();
+                
+                if (defaultMic != null)
+                {
+                    await microphoneService.SetDeviceAsync(defaultMic);
+                }
+                
+                if (defaultSpeaker != null)
+                {
+                    await speakerService.SetDeviceAsync(defaultSpeaker);
+                }
+                
+                // Send audio devices to the web app
+                SendAudioDevicesToWebView();
+                
+                StatusText.Text = "Audio services initialized";
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed to initialize audio services: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                StatusText.Text = "Audio services initialization failed";
+            }
+        }
+
+        private void OnTranscriptionReceived(object sender, TranscriptionEventArgs e)
+        {
+            Dispatcher.Invoke(() => {
+                currentTranscription.Add(e.Entry);
                 
                 // Send the transcription to the web app
-                SendTranscriptionToWebView(new List<TranscriptionEntry> { entry });
+                SendTranscriptionToWebView(new List<TranscriptionEntry> { e.Entry });
+            });
+        }
+
+        private async Task StartRecordingAsync()
+        {
+            try
+            {
+                // Clear previous transcription
+                currentTranscription.Clear();
+                
+                // Create cancellation tokens
+                micCts = new CancellationTokenSource();
+                speakerCts = new CancellationTokenSource();
+                
+                // Start services based on enabled state
+                if (microphoneEnabled)
+                {
+                    await microphoneService.StartRecordingAsync(micCts.Token);
+                }
+                
+                if (speakerEnabled)
+                {
+                    await speakerService.StartRecordingAsync(speakerCts.Token);
+                }
+                
+                StatusText.Text = "Recording started";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error starting recording: {ex.Message}";
+                await StopRecordingAsync();
             }
         }
 
-        private void Recognizer_SpeechHypothesized(object sender, SpeechHypothesizedEventArgs e)
+        private async Task StopRecordingAsync()
         {
-            // Could be used to show real-time partial results
+            try
+            {
+                // Cancel recognition tasks
+                micCts?.Cancel();
+                speakerCts?.Cancel();
+                
+                // Stop services
+                await microphoneService.StopRecordingAsync();
+                await speakerService.StopRecordingAsync();
+                
+                StatusText.Text = "Recording stopped";
+                
+                // Save the transcription
+                await SaveTranscriptionAsync();
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error stopping recording: {ex.Message}";
+            }
         }
 
         private void SendTranscriptionToWebView(List<TranscriptionEntry> entries)
@@ -156,6 +272,83 @@ namespace MeetingTranscriptionApp
             }
         }
 
+        private void SendAudioDevicesToWebView()
+        {
+            try
+            {
+                var microphones = audioDeviceManager.GetMicrophones().Select(m => new
+                {
+                    id = m.DeviceId,
+                    name = m.FriendlyName,
+                    isDefault = m.IsDefault
+                }).ToList();
+                
+                var speakers = audioDeviceManager.GetSpeakers().Select(s => new
+                {
+                    id = s.DeviceId,
+                    name = s.FriendlyName,
+                    isDefault = s.IsDefault
+                }).ToList();
+                
+                var message = new
+                {
+                    type = "AUDIO_DEVICES",
+                    data = new
+                    {
+                        microphones,
+                        speakers
+                    }
+                };
+                
+                string json = JsonSerializer.Serialize(message);
+                webView.CoreWebView2.PostWebMessageAsJson(json);
+                
+                // Alternative method: call a JavaScript function directly
+                string devicesJson = JsonSerializer.Serialize(new { microphones, speakers });
+                webView.CoreWebView2.ExecuteScriptAsync($"window.receiveAudioDevicesFromHost('{devicesJson.Replace("'", "\\'")}')");
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error sending audio devices: {ex.Message}";
+            }
+        }
+
+        private async Task SaveTranscriptionAsync()
+        {
+            try
+            {
+                // Create a new recording entry
+                var recording = new Recording
+                {
+                    Id = DateTime.Now.Ticks,
+                    Title = $"Meeting {DateTime.Now:MMM d, yyyy}",
+                    Date = DateTime.Now.ToString("MMMM d, yyyy"),
+                    Time = DateTime.Now.ToString("h:mm tt"),
+                    Duration = "00:00", // Calculate actual duration
+                    Participants = 2, // Microphone and Speaker
+                    Timestamp = DateTime.Now,
+                    Transcript = currentTranscription.ToList()
+                };
+                
+                // Save to a file or database
+                string json = JsonSerializer.Serialize(recording);
+                string fileName = $"Transcript_{DateTime.Now:yyyyMMdd_HHmmss}.json";
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "MeetingTranscriptions",
+                    fileName);
+                
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                await File.WriteAllTextAsync(path, json);
+                
+                StatusText.Text = $"Transcription saved to {path}";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error saving transcription: {ex.Message}";
+            }
+        }
+
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
@@ -175,7 +368,29 @@ namespace MeetingTranscriptionApp
                             if (message.Data != null && message.Data.TryGetProperty("isRecording", out var isRecordingValue))
                             {
                                 bool newRecordingState = isRecordingValue.GetBoolean();
-                                ToggleRecording(newRecordingState);
+                                ToggleRecordingAsync(newRecordingState);
+                            }
+                            break;
+                            
+                        case "REQUEST_AUDIO_DEVICES":
+                            SendAudioDevicesToWebView();
+                            break;
+                            
+                        case "SET_AUDIO_DEVICE":
+                            if (message.Data != null)
+                            {
+                                var deviceType = message.Data.GetProperty("deviceType").GetString();
+                                var deviceId = message.Data.GetProperty("deviceId").GetString();
+                                SetAudioDeviceAsync(deviceType, deviceId);
+                            }
+                            break;
+                            
+                        case "TOGGLE_AUDIO_SOURCE":
+                            if (message.Data != null)
+                            {
+                                var sourceType = message.Data.GetProperty("sourceType").GetString();
+                                var enabled = message.Data.GetProperty("enabled").GetBoolean();
+                                ToggleAudioSource(sourceType, enabled);
                             }
                             break;
                             
@@ -191,70 +406,77 @@ namespace MeetingTranscriptionApp
             }
         }
 
-        private void ToggleRecording(bool newState)
+        private async void SetAudioDeviceAsync(string deviceType, string deviceId)
         {
             try
             {
-                isRecording = newState;
-                
-                if (isRecording)
+                if (deviceType == "microphone")
                 {
-                    // Start recording
-                    currentTranscription.Clear();
-                    waveIn.StartRecording();
-                    recognizer.RecognizeAsync(RecognizeMode.Multiple);
-                    StatusText.Text = "Recording started";
+                    var device = audioDeviceManager.GetMicrophones().FirstOrDefault(m => m.DeviceId == deviceId);
+                    if (device != null)
+                    {
+                        await microphoneService.SetDeviceAsync(device);
+                        StatusText.Text = $"Microphone set to: {device.FriendlyName}";
+                    }
                 }
-                else
+                else if (deviceType == "speaker")
                 {
-                    // Stop recording
-                    waveIn.StopRecording();
-                    recognizer.RecognizeAsyncStop();
-                    StatusText.Text = "Recording stopped";
+                    var device = audioDeviceManager.GetSpeakers().FirstOrDefault(s => s.DeviceId == deviceId);
+                    if (device != null)
+                    {
+                        await speakerService.SetDeviceAsync(device);
+                        StatusText.Text = $"Speaker set to: {device.FriendlyName}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error setting audio device: {ex.Message}";
+            }
+        }
+
+        private void ToggleAudioSource(string sourceType, bool enabled)
+        {
+            try
+            {
+                if (sourceType == "microphone")
+                {
+                    microphoneEnabled = enabled;
+                    StatusText.Text = $"Microphone transcription {(enabled ? "enabled" : "disabled")}";
+                }
+                else if (sourceType == "speaker")
+                {
+                    speakerEnabled = enabled;
+                    StatusText.Text = $"Speaker transcription {(enabled ? "enabled" : "disabled")}";
+                }
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Error toggling audio source: {ex.Message}";
+            }
+        }
+
+        private async void ToggleRecordingAsync(bool newState)
+        {
+            try
+            {
+                if (newState != isRecording)
+                {
+                    isRecording = newState;
                     
-                    // Save the transcription
-                    SaveTranscription();
+                    if (isRecording)
+                    {
+                        await StartRecordingAsync();
+                    }
+                    else
+                    {
+                        await StopRecordingAsync();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 StatusText.Text = $"Error toggling recording: {ex.Message}";
-            }
-        }
-
-        private void SaveTranscription()
-        {
-            try
-            {
-                // Create a new recording entry
-                var recording = new Recording
-                {
-                    Id = DateTime.Now.Ticks,
-                    Title = $"Meeting {DateTime.Now:MMM d, yyyy}",
-                    Date = DateTime.Now.ToString("MMMM d, yyyy"),
-                    Time = DateTime.Now.ToString("h:mm tt"),
-                    Duration = "00:00", // Calculate actual duration
-                    Participants = 5, // Get actual participant count
-                    Timestamp = DateTime.Now,
-                    Transcript = currentTranscription
-                };
-                
-                // Save to a file or database
-                string json = JsonSerializer.Serialize(recording);
-                string fileName = $"Transcript_{DateTime.Now:yyyyMMdd_HHmmss}.json";
-                string path = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "MeetingTranscriptions",
-                    fileName);
-                
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, json);
-                
-                StatusText.Text = $"Transcription saved to {path}";
-            }
-            catch (Exception ex)
-            {
-                StatusText.Text = $"Error saving transcription: {ex.Message}";
             }
         }
 
@@ -291,8 +513,19 @@ namespace MeetingTranscriptionApp
             }
         }
 
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        private async void CloseButton_Click(object sender, RoutedEventArgs e)
         {
+            // Ensure we stop recording before closing
+            if (isRecording)
+            {
+                isRecording = false;
+                await StopRecordingAsync();
+            }
+            
+            // Clean up resources
+            microphoneService?.Dispose();
+            speakerService?.Dispose();
+            
             Close();
         }
         

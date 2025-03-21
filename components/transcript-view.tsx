@@ -9,19 +9,19 @@ import type { TranscriptEntry, TranscriptionEntryData } from "@/types"
 const sampleTranscript: TranscriptEntry[] = [
   {
     id: 1,
-    speaker: { name: "Guest 1", initials: "G1", color: "#4F6BED" },
+    speaker: { name: "Microphone", initials: "MIC", color: "#4F6BED" },
     text: "Good morning everyone! Let's start our daily standup. Can everyone share what they worked on yesterday and what they plan to do today?",
     timestamp: "9:30:15 AM",
   },
   {
     id: 2,
-    speaker: { name: "Sarah Chen", initials: "SC", color: "#D83B01" },
+    speaker: { name: "Speaker", initials: "SPK", color: "#D83B01" },
     text: "Yesterday I finished the wireframes for the new dashboard and got feedback from the team. Today I'll be working on implementing those changes and starting on the user profile redesign.",
     timestamp: "9:30:45 AM",
   },
   {
     id: 3,
-    speaker: { name: "Emma Wilson", initials: "EW", color: "#8764B8" },
+    speaker: { name: "Microphone", initials: "MIC", color: "#4F6BED" },
     text: "I completed the test cases for the payment module yesterday. Today I'll be running regression tests and documenting any issues I find.",
     timestamp: "9:31:20 AM",
   },

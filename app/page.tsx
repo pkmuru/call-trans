@@ -2,16 +2,24 @@
 
 import { useState, useEffect } from "react"
 import { FluentProvider, webLightTheme, TabList, Tab } from "@fluentui/react-components"
-import { DocumentRegular, HistoryRegular } from "@fluentui/react-icons"
+import { DocumentRegular, HistoryRegular, SettingsRegular } from "@fluentui/react-icons"
 import MeetingHeader from "@/components/meeting-header"
 import CurrentMeetingView from "@/components/current-meeting-view"
 import RecordingHistoryView from "@/components/recording-history-view"
+import SettingsView from "@/components/settings-view"
 import { WebViewCommunicator } from "@/utils/webview-communicator"
-import type { TranscriptionEntryData } from "@/types"
+import type { TranscriptionEntryData, AudioDevice } from "@/types"
 
 export default function Home() {
   const [isRecording, setIsRecording] = useState(false)
   const [activeTab, setActiveTab] = useState("current")
+  const [audioDevices, setAudioDevices] = useState<{
+    microphones: AudioDevice[]
+    speakers: AudioDevice[]
+  }>({
+    microphones: [],
+    speakers: [],
+  })
 
   // Initialize WebView2 communication
   useEffect(() => {
@@ -22,6 +30,14 @@ export default function Home() {
     WebViewCommunicator.onReceiveTranscription((transcriptionData: TranscriptionEntryData[]) => {
       console.log("Received transcription data:", transcriptionData)
       // Handle transcription data here
+    })
+
+    // Request audio devices from the WPF host
+    WebViewCommunicator.requestAudioDevices()
+
+    // Listen for audio devices from the WPF host
+    WebViewCommunicator.onReceiveAudioDevices((devices) => {
+      setAudioDevices(devices)
     })
 
     return () => {
@@ -35,6 +51,14 @@ export default function Home() {
 
     // Notify the WPF host about recording state change
     WebViewCommunicator.notifyRecordingStateChanged(newRecordingState)
+  }
+
+  const handleDeviceSelection = (type: "microphone" | "speaker", deviceId: string) => {
+    WebViewCommunicator.setAudioDevice(type, deviceId)
+  }
+
+  const handleSourceToggle = (type: "microphone" | "speaker", enabled: boolean) => {
+    WebViewCommunicator.toggleAudioSource(type, enabled)
   }
 
   return (
@@ -53,6 +77,9 @@ export default function Home() {
               <Tab value="history" icon={<HistoryRegular />}>
                 Recording History
               </Tab>
+              <Tab value="settings" icon={<SettingsRegular />}>
+                Settings
+              </Tab>
             </TabList>
           </div>
 
@@ -60,8 +87,14 @@ export default function Home() {
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
             {activeTab === "current" ? (
               <CurrentMeetingView isRecording={isRecording} toggleRecording={toggleRecording} />
-            ) : (
+            ) : activeTab === "history" ? (
               <RecordingHistoryView />
+            ) : (
+              <SettingsView
+                audioDevices={audioDevices}
+                onDeviceSelect={handleDeviceSelection}
+                onSourceToggle={handleSourceToggle}
+              />
             )}
           </div>
         </div>

@@ -40,6 +40,13 @@ export interface KnownUser {
   color: string
 }
 
+// Audio device types
+export interface AudioDevice {
+  id: string
+  name: string
+  isDefault: boolean
+}
+
 // WebView communication types
 export interface WebViewMessage {
   type: string
@@ -55,6 +62,34 @@ export interface RecordingStateMessage extends WebViewMessage {
 
 export interface AppReadyMessage extends WebViewMessage {
   type: "APP_READY"
+}
+
+export interface RequestAudioDevicesMessage extends WebViewMessage {
+  type: "REQUEST_AUDIO_DEVICES"
+}
+
+export interface AudioDevicesMessage extends WebViewMessage {
+  type: "AUDIO_DEVICES"
+  data: {
+    microphones: AudioDevice[]
+    speakers: AudioDevice[]
+  }
+}
+
+export interface SetAudioDeviceMessage extends WebViewMessage {
+  type: "SET_AUDIO_DEVICE"
+  data: {
+    deviceType: "microphone" | "speaker"
+    deviceId: string
+  }
+}
+
+export interface ToggleAudioSourceMessage extends WebViewMessage {
+  type: "TOGGLE_AUDIO_SOURCE"
+  data: {
+    sourceType: "microphone" | "speaker"
+    enabled: boolean
+  }
 }
 
 export interface TranscriptionDataMessage extends WebViewMessage {

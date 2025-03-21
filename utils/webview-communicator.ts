@@ -4,6 +4,11 @@ import type {
   AppReadyMessage,
   TranscriptionDataMessage,
   TranscriptionEntryData,
+  RequestAudioDevicesMessage,
+  AudioDevicesMessage,
+  SetAudioDeviceMessage,
+  ToggleAudioSourceMessage,
+  AudioDevice,
 } from "@/types"
 
 /**
@@ -14,10 +19,25 @@ function isTranscriptionDataMessage(message: WebViewMessage): message is Transcr
 }
 
 /**
+ * Type guard to check if a message is an AudioDevicesMessage
+ */
+function isAudioDevicesMessage(message: WebViewMessage): message is AudioDevicesMessage {
+  return (
+    message.type === "AUDIO_DEVICES" &&
+    message.data &&
+    Array.isArray(message.data.microphones) &&
+    Array.isArray(message.data.speakers)
+  )
+}
+
+/**
  * Utility for communication between the React app and the WebView2 host
  */
 export class WebViewCommunicator {
   private static transcriptionCallback: ((data: TranscriptionEntryData[]) => void) | null = null
+  private static audioDevicesCallback:
+    | ((data: { microphones: AudioDevice[]; speakers: AudioDevice[] }) => void)
+    | null = null
 
   /**
    * Initialize communication with the WebView2 host
@@ -38,6 +58,19 @@ export class WebViewCommunicator {
         }
       } catch (error) {
         console.error("Error parsing transcription data:", error)
+      }
+    }
+    ;(window as any).receiveAudioDevicesFromHost = (audioDevicesData: string) => {
+      try {
+        const parsedData = JSON.parse(audioDevicesData) as {
+          microphones: AudioDevice[]
+          speakers: AudioDevice[]
+        }
+        if (this.audioDevicesCallback) {
+          this.audioDevicesCallback(parsedData)
+        }
+      } catch (error) {
+        console.error("Error parsing audio devices data:", error)
       }
     }
   }
@@ -63,6 +96,12 @@ export class WebViewCommunicator {
       case "TRANSCRIPTION_DATA":
         if (isTranscriptionDataMessage(message) && WebViewCommunicator.transcriptionCallback) {
           WebViewCommunicator.transcriptionCallback(message.data.entries)
+        }
+        break
+
+      case "AUDIO_DEVICES":
+        if (isAudioDevicesMessage(message) && WebViewCommunicator.audioDevicesCallback) {
+          WebViewCommunicator.audioDevicesCallback(message.data)
         }
         break
 
@@ -99,10 +138,57 @@ export class WebViewCommunicator {
   }
 
   /**
+   * Request audio devices from the host
+   */
+  static requestAudioDevices(): void {
+    const message: RequestAudioDevicesMessage = {
+      type: "REQUEST_AUDIO_DEVICES",
+    }
+    this.sendMessageToHost(message)
+  }
+
+  /**
+   * Set the audio device to use
+   */
+  static setAudioDevice(deviceType: "microphone" | "speaker", deviceId: string): void {
+    const message: SetAudioDeviceMessage = {
+      type: "SET_AUDIO_DEVICE",
+      data: {
+        deviceType,
+        deviceId,
+      },
+    }
+    this.sendMessageToHost(message)
+  }
+
+  /**
+   * Toggle an audio source on/off
+   */
+  static toggleAudioSource(sourceType: "microphone" | "speaker", enabled: boolean): void {
+    const message: ToggleAudioSourceMessage = {
+      type: "TOGGLE_AUDIO_SOURCE",
+      data: {
+        sourceType,
+        enabled,
+      },
+    }
+    this.sendMessageToHost(message)
+  }
+
+  /**
    * Register a callback to receive transcription data
    */
   static onReceiveTranscription(callback: (data: TranscriptionEntryData[]) => void): void {
     this.transcriptionCallback = callback
+  }
+
+  /**
+   * Register a callback to receive audio devices data
+   */
+  static onReceiveAudioDevices(
+    callback: (data: { microphones: AudioDevice[]; speakers: AudioDevice[] }) => void,
+  ): void {
+    this.audioDevicesCallback = callback
   }
 }
 
