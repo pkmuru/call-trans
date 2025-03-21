@@ -6,17 +6,20 @@ using System.Threading.Tasks;
 
 namespace MeetingTranscriptionApp
 {
-    public class AudioDeviceManager
+    /// <summary>
+    /// Manages audio devices using NAudio
+    /// </summary>
+    public class AudioDeviceManager : IDisposable
     {
         private MMDeviceEnumerator deviceEnumerator;
-        private List<MMDevice> microphones;
-        private List<MMDevice> speakers;
+        private List<AudioDeviceInfo> microphones;
+        private List<AudioDeviceInfo> speakers;
         
         public AudioDeviceManager()
         {
             deviceEnumerator = new MMDeviceEnumerator();
-            microphones = new List<MMDevice>();
-            speakers = new List<MMDevice>();
+            microphones = new List<AudioDeviceInfo>();
+            speakers = new List<AudioDeviceInfo>();
         }
         
         public async Task InitializeAsync()
@@ -29,92 +32,122 @@ namespace MeetingTranscriptionApp
         public void RefreshDevices()
         {
             // Clear existing devices
-            DisposeDevices();
+            microphones.Clear();
+            speakers.Clear();
             
-            // Get all audio endpoints
-            var captureDevices = deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
-            var renderDevices = deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
-            
-            // Get default devices
-            var defaultCapture = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-            var defaultRender = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-            
-            // Add microphones
-            foreach (var device in captureDevices)
+            try
             {
-                device.IsDefault = device.ID == defaultCapture.ID;
-                microphones.Add(device);
+                // Get all audio endpoints
+                var captureDevices = deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+                var renderDevices = deviceEnumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+                
+                // Get default devices
+                var defaultCapture = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+                var defaultRender = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                
+                // Add microphones
+                foreach (var device in captureDevices)
+                {
+                    microphones.Add(new AudioDeviceInfo(
+                        device.ID,
+                        device.FriendlyName,
+                        device.ID == defaultCapture.ID,
+                        device
+                    ));
+                }
+                
+                // Add speakers
+                foreach (var device in renderDevices)
+                {
+                    speakers.Add(new AudioDeviceInfo(
+                        device.ID,
+                        device.FriendlyName,
+                        device.ID == defaultRender.ID,
+                        device
+                    ));
+                }
             }
-            
-            // Add speakers
-            foreach (var device in renderDevices)
+            catch (Exception ex)
             {
-                device.IsDefault = device.ID == defaultRender.ID;
-                speakers.Add(device);
+                Console.WriteLine($"Error refreshing devices: {ex.Message}");
+                // Add fallback devices if needed
             }
         }
         
-        public List<MMDevice> GetMicrophones()
+        public List<AudioDeviceInfo> GetMicrophones()
         {
             return microphones;
         }
         
-        public List<MMDevice> GetSpeakers()
+        public List<AudioDeviceInfo> GetSpeakers()
         {
             return speakers;
         }
         
         public MMDevice GetDefaultMicrophone()
         {
-            return microphones.FirstOrDefault(m => m.IsDefault) ?? microphones.FirstOrDefault();
+            var defaultMic = microphones.FirstOrDefault(m => m.IsDefault);
+            return defaultMic != null ? defaultMic.Device : (microphones.FirstOrDefault()?.Device);
         }
         
         public MMDevice GetDefaultSpeaker()
         {
-            return speakers.FirstOrDefault(s => s.IsDefault) ?? speakers.FirstOrDefault();
+            var defaultSpeaker = speakers.FirstOrDefault(s => s.IsDefault);
+            return defaultSpeaker != null ? defaultSpeaker.Device : (speakers.FirstOrDefault()?.Device);
         }
         
         public MMDevice GetMicrophoneById(string deviceId)
         {
-            return microphones.FirstOrDefault(m => m.ID == deviceId);
+            var mic = microphones.FirstOrDefault(m => m.Id == deviceId);
+            return mic?.Device;
         }
         
         public MMDevice GetSpeakerById(string deviceId)
         {
-            return speakers.FirstOrDefault(s => s.ID == deviceId);
-        }
-        
-        private void DisposeDevices()
-        {
-            foreach (var device in microphones)
-            {
-                device.Dispose();
-            }
-            
-            foreach (var device in speakers)
-            {
-                device.Dispose();
-            }
-            
-            microphones.Clear();
-            speakers.Clear();
+            var speaker = speakers.FirstOrDefault(s => s.Id == deviceId);
+            return speaker?.Device;
         }
         
         public void Dispose()
         {
-            DisposeDevices();
-            deviceEnumerator.Dispose();
+            deviceEnumerator?.Dispose();
         }
     }
     
-    // Extension method to add IsDefault property to MMDevice
-    public static class MMDeviceExtensions
+    /// <summary>
+    /// Wrapper class for audio device information
+    /// </summary>
+    public class AudioDeviceInfo
     {
-        public static bool IsDefault { get; set; }
+        /// <summary>
+        /// Device ID
+        /// </summary>
+        public string Id { get; }
         
-        public static void SetIsDefault(this MMDevice device, bool isDefault)
+        /// <summary>
+        /// Friendly name of the device
+        /// </summary>
+        public string FriendlyName { get; }
+        
+        /// <summary>
+        /// Whether this is the default device
+        /// </summary>
+        public bool IsDefault { get; }
+        
+        /// <summary>
+        /// The underlying MMDevice
+        /// </summary>
+        public MMDevice Device { get; }
+        
+        /// <summary>
+        /// Creates a new AudioDeviceInfo
+        /// </summary>
+        public AudioDeviceInfo(string id, string friendlyName, bool isDefault, MMDevice device)
         {
-            device.IsDefault = isDefault;
+            Id = id;
+            FriendlyName = friendlyName;
+            IsDefault = isDefault;
+            Device = device;
         }
     }
 }

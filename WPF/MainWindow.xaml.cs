@@ -1,6 +1,7 @@
 using Microsoft.Web.WebView2.Core;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
 using System.IO;
@@ -259,11 +260,11 @@ namespace MeetingTranscriptionApp
                     }
                 };
                 
-                string json = JsonSerializer.Serialize(message);
+                string json = JsonConvert.SerializeObject(message);
                 webView.CoreWebView2.PostWebMessageAsJson(json);
                 
                 // Alternative method: call a JavaScript function directly
-                string entriesJson = JsonSerializer.Serialize(entries);
+                string entriesJson = JsonConvert.SerializeObject(entries);
                 webView.CoreWebView2.ExecuteScriptAsync($"window.receiveTranscriptionFromHost('{entriesJson.Replace("'", "\\'")}')");
             }
             catch (Exception ex)
@@ -278,14 +279,14 @@ namespace MeetingTranscriptionApp
             {
                 var microphones = audioDeviceManager.GetMicrophones().Select(m => new
                 {
-                    id = m.DeviceId,
+                    id = m.Id,
                     name = m.FriendlyName,
                     isDefault = m.IsDefault
                 }).ToList();
                 
                 var speakers = audioDeviceManager.GetSpeakers().Select(s => new
                 {
-                    id = s.DeviceId,
+                    id = s.Id,
                     name = s.FriendlyName,
                     isDefault = s.IsDefault
                 }).ToList();
@@ -300,11 +301,11 @@ namespace MeetingTranscriptionApp
                     }
                 };
                 
-                string json = JsonSerializer.Serialize(message);
+                string json = JsonConvert.SerializeObject(message);
                 webView.CoreWebView2.PostWebMessageAsJson(json);
                 
                 // Alternative method: call a JavaScript function directly
-                string devicesJson = JsonSerializer.Serialize(new { microphones, speakers });
+                string devicesJson = JsonConvert.SerializeObject(new { microphones, speakers });
                 webView.CoreWebView2.ExecuteScriptAsync($"window.receiveAudioDevicesFromHost('{devicesJson.Replace("'", "\\'")}')");
             }
             catch (Exception ex)
@@ -331,7 +332,7 @@ namespace MeetingTranscriptionApp
                 };
                 
                 // Save to a file or database
-                string json = JsonSerializer.Serialize(recording);
+                string json = JsonConvert.SerializeObject(recording, Formatting.Indented);
                 string fileName = $"Transcript_{DateTime.Now:yyyyMMdd_HHmmss}.json";
                 string path = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -354,7 +355,7 @@ namespace MeetingTranscriptionApp
             try
             {
                 string messageJson = e.WebMessageAsJson;
-                var message = JsonSerializer.Deserialize<WebMessage>(messageJson);
+                var message = JsonConvert.DeserializeObject<WebMessage>(messageJson);
                 
                 if (message != null)
                 {
@@ -365,9 +366,9 @@ namespace MeetingTranscriptionApp
                             break;
                             
                         case "RECORDING_STATE_CHANGED":
-                            if (message.Data != null && message.Data.TryGetProperty("isRecording", out var isRecordingValue))
+                            if (message.Data != null)
                             {
-                                bool newRecordingState = isRecordingValue.GetBoolean();
+                                bool newRecordingState = message.Data["isRecording"].Value<bool>();
                                 ToggleRecordingAsync(newRecordingState);
                             }
                             break;
@@ -379,8 +380,8 @@ namespace MeetingTranscriptionApp
                         case "SET_AUDIO_DEVICE":
                             if (message.Data != null)
                             {
-                                var deviceType = message.Data.GetProperty("deviceType").GetString();
-                                var deviceId = message.Data.GetProperty("deviceId").GetString();
+                                string deviceType = message.Data["deviceType"].Value<string>();
+                                string deviceId = message.Data["deviceId"].Value<string>();
                                 SetAudioDeviceAsync(deviceType, deviceId);
                             }
                             break;
@@ -388,8 +389,8 @@ namespace MeetingTranscriptionApp
                         case "TOGGLE_AUDIO_SOURCE":
                             if (message.Data != null)
                             {
-                                var sourceType = message.Data.GetProperty("sourceType").GetString();
-                                var enabled = message.Data.GetProperty("enabled").GetBoolean();
+                                string sourceType = message.Data["sourceType"].Value<string>();
+                                bool enabled = message.Data["enabled"].Value<bool>();
                                 ToggleAudioSource(sourceType, enabled);
                             }
                             break;
@@ -412,7 +413,7 @@ namespace MeetingTranscriptionApp
             {
                 if (deviceType == "microphone")
                 {
-                    var device = audioDeviceManager.GetMicrophones().FirstOrDefault(m => m.DeviceId == deviceId);
+                    var device = audioDeviceManager.GetMicrophoneById(deviceId);
                     if (device != null)
                     {
                         await microphoneService.SetDeviceAsync(device);
@@ -421,7 +422,7 @@ namespace MeetingTranscriptionApp
                 }
                 else if (deviceType == "speaker")
                 {
-                    var device = audioDeviceManager.GetSpeakers().FirstOrDefault(s => s.DeviceId == deviceId);
+                    var device = audioDeviceManager.GetSpeakerById(deviceId);
                     if (device != null)
                     {
                         await speakerService.SetDeviceAsync(device);
@@ -525,6 +526,7 @@ namespace MeetingTranscriptionApp
             // Clean up resources
             microphoneService?.Dispose();
             speakerService?.Dispose();
+            audioDeviceManager?.Dispose();
             
             Close();
         }
@@ -534,11 +536,12 @@ namespace MeetingTranscriptionApp
 
     public class WebMessage
     {
+        [JsonProperty("type")]
         public string Type { get; set; }
-        public JsonElement? Data { get; set; }
+        
+        [JsonProperty("data")]
+        public JObject Data { get; set; }
     }
-
-    // TranscriptionEntry has been moved to TranscriptionEventArgs.cs
 
     public class Recording
     {

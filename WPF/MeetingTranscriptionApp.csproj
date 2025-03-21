@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.CognitiveServices.Speech" Version="1.31.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.1587.40" />
     <PackageReference Include="NAudio" Version="2.1.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>
