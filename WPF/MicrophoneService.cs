@@ -180,15 +180,5 @@ namespace MeetingTranscriptionApp
             recognizer?.Dispose();
         }
     }
-    
-    public class TranscriptionEventArgs : EventArgs
-    {
-        public TranscriptionEntry Entry { get; }
-        
-        public TranscriptionEventArgs(TranscriptionEntry entry)
-        {
-            Entry = entry;
-        }
-    }
 }
 

@@ -1,3 +1,5 @@
+// Update TranscriptionService.cs to use the shared TranscriptionEventArgs class
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -112,16 +114,6 @@ namespace MeetingTranscriptionApp
         {
             waveIn?.Dispose();
             recognizer?.Dispose();
-        }
-    }
-    
-    public class TranscriptionEventArgs : EventArgs
-    {
-        public TranscriptionEntry Entry { get; }
-        
-        public TranscriptionEventArgs(TranscriptionEntry entry)
-        {
-            Entry = entry;
         }
     }
 }

@@ -1,3 +1,5 @@
+// Update AudioProcessingService.cs to use the shared TranscriptionEventArgs class
+
 using Microsoft.CognitiveServices.Speech;
 using Microsoft.CognitiveServices.Speech.Audio;
 using NAudio.Wave;
@@ -106,16 +108,6 @@ namespace MeetingTranscriptionApp
         public void Dispose()
         {
             // Clean up resources if needed
-        }
-    }
-    
-    public class TranscriptionEventArgs : EventArgs
-    {
-        public TranscriptionEntry Entry { get; }
-        
-        public TranscriptionEventArgs(TranscriptionEntry entry)
-        {
-            Entry = entry;
         }
     }
 }

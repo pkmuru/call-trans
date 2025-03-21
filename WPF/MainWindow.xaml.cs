@@ -538,14 +538,7 @@ namespace MeetingTranscriptionApp
         public JsonElement? Data { get; set; }
     }
 
-    public class TranscriptionEntry
-    {
-        public string SpeakerName { get; set; }
-        public string SpeakerInitials { get; set; }
-        public string SpeakerColor { get; set; }
-        public string Text { get; set; }
-        public string Timestamp { get; set; }
-    }
+    // TranscriptionEntry has been moved to TranscriptionEventArgs.cs
 
     public class Recording
     {
