@@ -1,183 +1,212 @@
 using Microsoft.CognitiveServices.Speech;
 using Microsoft.CognitiveServices.Speech.Audio;
+using Microsoft.CognitiveServices.Speech.Transcription;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using Newtonsoft.Json.Linq;
 using System;
-using System.Threading;
+using System.Drawing;
 using System.Threading.Tasks;
 
 namespace MeetingTranscriptionApp
 {
     public class SpeakerService : IDisposable
     {
-        private readonly SpeechConfig speechConfig;
-        private SpeechRecognizer recognizer;
-        private WasapiLoopbackCapture speakerCapture;
-        private BufferedWaveProvider speakerBuffer;
-        private MMDevice currentDevice;
-        private bool isRecording;
-        
+        private readonly string subscriptionKey;
+        private readonly string region;
+        private WasapiLoopbackCapture capture;
+        private PushAudioInputStream pushStream;
+        private ConversationTranscriber recognizer;
+        public MMDevice AudioDevice { get; private set; }
+
         // Speaker color for visual distinction
         private readonly string SpeakerColor = "#D83B01"; // Orange for system audio
         
         // Event for transcription results
         public event EventHandler<TranscriptionEventArgs> TranscriptionReceived;
-        
-        public SpeakerService(SpeechConfig speechConfig)
+        public event Action<string> ErrorOccurred;
+
+ 
+        public SpeakerService(string subscriptionKey, string region)
         {
-            this.speechConfig = speechConfig;
+            this.subscriptionKey = subscriptionKey;
+            this.region = region;
         }
-        
-        public async Task SetDeviceAsync(MMDevice device)
+
+     
+
+        public async Task StartRecordingAsync(System.Threading.CancellationToken cancellationToken, String deviceID)
         {
-            // Stop recording if active
-            if (isRecording)
-            {
-                await StopRecordingAsync();
-            }
-            
-            // Dispose of existing capture
-            speakerCapture?.Dispose();
-            
-            // Set new device
-            currentDevice = device;
-            
-            // Initialize capture for new device
-            speakerCapture = new WasapiLoopbackCapture(device);
-            speakerBuffer = new BufferedWaveProvider(speakerCapture.WaveFormat);
-            speakerCapture.DataAvailable += SpeakerCapture_DataAvailable;
-        }
-        
-        private void SpeakerCapture_DataAvailable(object sender, WaveInEventArgs e)
-        {
-            if (isRecording)
-            {
-                speakerBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-            }
-        }
-        
-        public async Task StartRecordingAsync(CancellationToken cancellationToken)
-        {
-            if (speakerCapture == null || currentDevice == null)
-            {
-                throw new InvalidOperationException("Speaker device not set");
-            }
-            
             try
             {
-                // Clear buffer
-                speakerBuffer.ClearBuffer();
+                // Configure speech settings
+
+                var speechConfig = SpeechConfig.FromSubscription(subscriptionKey, region);
+                speechConfig.SpeechRecognitionLanguage = "en-US";
+                speechConfig.OutputFormat = OutputFormat.Detailed;
+                speechConfig.SetProperty("SpeechServiceResponse_SpeakerDiarizationEnabled", "true");
+                speechConfig.SetProperty(PropertyId.SpeechServiceResponse_DiarizeIntermediateResults, "true");
+                speechConfig.EnableDictation();
+
+                // Create audio stream
+                var audioFormat = AudioStreamFormat.GetWaveFormatPCM(16000, 16, 1);
+                pushStream = AudioInputStream.CreatePushStream(audioFormat);
+                var audioConfig = AudioConfig.FromStreamInput(pushStream);
                 
-                // Start capture
-                speakerCapture.StartRecording();
-                
-                // Start recognition
-                _ = Task.Run(() => StartRecognitionAsync(cancellationToken));
-                
-                isRecording = true;
+                // Create conversation transcriber
+                recognizer = new ConversationTranscriber(speechConfig, audioConfig);
+
+                // Set up event handlers
+                recognizer.Transcribed += (s, e) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Result.Text))
+                    {
+                        var json = e.Result.Properties.GetProperty(PropertyId.SpeechServiceResponse_JsonResult);
+                        ProcessTranscriptionResult(e.Result, json);
+                    }
+                };
+
+                recognizer.Canceled += (s, e) =>
+                {
+                    ErrorOccurred?.Invoke($"Canceled: {e.Reason} - {e.ErrorDetails}");
+                };
+
+                // Start transcribing
+                await recognizer.StartTranscribingAsync();
+
+                if(deviceID == null)
+                {
+                    var enumerator = new MMDeviceEnumerator();
+                    AudioDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                }
+                else
+                {
+                    var enumerator = new MMDeviceEnumerator();
+                    try
+                    {
+                        AudioDevice = enumerator.GetDevice(deviceID);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Fallback to default or notify the user
+                        AudioDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Console);
+                    }
+                }
+
+
+                // Initialize audio capture
+                capture = new WasapiLoopbackCapture(AudioDevice);
+
+                // Set up data available handler
+                capture.DataAvailable += (s, a) =>
+                {
+                    try
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                        {
+                            byte[] buffer = new byte[a.BytesRecorded];
+                            Array.Copy(a.Buffer, 0, buffer, 0, a.BytesRecorded);
+                            pushStream.Write(buffer);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorOccurred?.Invoke($"System Audio Write Error: {ex.Message}");
+                    }
+                };
+
+                // Start recording
+                capture.StartRecording();
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to start speaker recording: {ex.Message}", ex);
+                ErrorOccurred?.Invoke($"System Audio Capture Error: {ex.Message}");
+                throw;
             }
         }
-        
+
         public async Task StopRecordingAsync()
         {
             try
             {
-                isRecording = false;
-                
-                // Stop capture
-                if (speakerCapture != null && speakerCapture.CaptureState == CaptureState.Capturing)
+                // Stop and dispose capture
+                if (capture != null)
                 {
-                    speakerCapture.StopRecording();
+                    capture.StopRecording();
+                    capture.Dispose();
+                    capture = null;
                 }
-                
-                // Stop recognizer
+
+                // Close push stream
+                if (pushStream != null)
+                {
+                    pushStream.Close();
+                    pushStream = null;
+                }
+
+                // Stop and dispose recognizer
                 if (recognizer != null)
                 {
-                    await recognizer.StopContinuousRecognitionAsync();
+                    await recognizer.StopTranscribingAsync();
+                    recognizer.Dispose();
+                    recognizer = null;
                 }
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to stop speaker recording: {ex.Message}", ex);
+                ErrorOccurred?.Invoke($"Error stopping speaker recording: {ex.Message}");
+                throw;
             }
         }
-        
-        private async Task StartRecognitionAsync(CancellationToken cancellationToken)
+
+        private void ProcessTranscriptionResult(ConversationTranscriptionResult result, string jsonResult)
         {
             try
             {
-                // Create an audio stream from the speaker buffer
-                var audioInputStream = AudioInputStream.CreatePushStream(AudioStreamFormat.GetWaveFormatPCM(
-                    (uint)speakerCapture.WaveFormat.SampleRate,
-                    (byte)speakerCapture.WaveFormat.BitsPerSample,
-                    (byte)speakerCapture.WaveFormat.Channels));
+                // Parse the JSON to extract speaker information if available
+                string speakerName = "System Audio";
+                string speakerInitials = "SPK";
                 
-                // Create audio config from the stream
-                var audioConfig = AudioConfig.FromStreamInput(audioInputStream);
-                
-                // Create speech recognizer
-                recognizer = new SpeechRecognizer(speechConfig, audioConfig);
-                
-                // Set up event handlers
-                recognizer.Recognized += (s, e) => {
-                    if (e.Result.Reason == ResultReason.RecognizedSpeech && !string.IsNullOrWhiteSpace(e.Result.Text))
-                    {
-                        ProcessRecognizedSpeech(e.Result.Text);
-                    }
-                };
-                
-                // Start continuous recognition
-                await recognizer.StartContinuousRecognitionAsync();
-                
-                // Process audio data in a loop
-                byte[] buffer = new byte[16000];
-                while (!cancellationToken.IsCancellationRequested && isRecording)
+                if (!string.IsNullOrEmpty(jsonResult))
                 {
-                    int bytesRead = speakerBuffer.Read(buffer, 0, buffer.Length);
-                    if (bytesRead > 0)
+                    var json = JObject.Parse(jsonResult);
+                    if (json["NBest"] is JArray nBest && nBest.Count > 0)
                     {
-                        audioInputStream.Write(buffer, bytesRead);
+                        var firstResult = nBest[0];
+                        if (firstResult["Speaker"] != null)
+                        {
+                            var speakerId = firstResult["Speaker"].ToString();
+                            speakerName = $"Speaker {speakerId}";
+                            speakerInitials = $"S{speakerId}";
+                        }
                     }
-                    await Task.Delay(100, cancellationToken);
                 }
-                
-                // Stop recognition
-                await recognizer.StopContinuousRecognitionAsync();
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal cancellation, no need to handle
+
+                // Create transcription entry
+                var entry = new TranscriptionEntry
+                {
+                    SpeakerName = speakerName,
+                    SpeakerInitials = speakerInitials,
+                    SpeakerColor = SpeakerColor,
+                    Text = result.Text,
+                    Timestamp = DateTime.Now.ToString("h:mm:ss tt")
+                };
+
+                // Raise event
+                TranscriptionReceived?.Invoke(this, new TranscriptionEventArgs(entry));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in speaker recognition: {ex.Message}");
+                ErrorOccurred?.Invoke($"Error processing transcription result: {ex.Message}");
             }
         }
-        
-        private void ProcessRecognizedSpeech(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            
-            var entry = new TranscriptionEntry
-            {
-                SpeakerName = "System Audio",
-                SpeakerInitials = "SPK",
-                SpeakerColor = SpeakerColor,
-                Text = text,
-                Timestamp = DateTime.Now.ToString("h:mm:ss tt")
-            };
-            
-            TranscriptionReceived?.Invoke(this, new TranscriptionEventArgs(entry));
-        }
-        
+
         public void Dispose()
         {
-            speakerCapture?.Dispose();
+            StopRecordingAsync().Wait();
+            capture?.Dispose();
             recognizer?.Dispose();
+            pushStream?.Dispose();
         }
     }
 }

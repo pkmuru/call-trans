@@ -1,8 +1,11 @@
-using Microsoft.CognitiveServices.Speech;
+﻿using Microsoft.CognitiveServices.Speech;
 using Microsoft.CognitiveServices.Speech.Audio;
+using Microsoft.CognitiveServices.Speech.Transcription;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
+using Newtonsoft.Json.Linq;
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -10,175 +13,167 @@ namespace MeetingTranscriptionApp
 {
     public class MicrophoneService : IDisposable
     {
-        private readonly SpeechConfig speechConfig;
-        private SpeechRecognizer recognizer;
-        private WasapiCapture microphoneCapture;
-        private BufferedWaveProvider micBuffer;
-        private MMDevice currentDevice;
-        private bool isRecording;
-        
-        // Speaker color for visual distinction
-        private readonly string MicColor = "#4F6BED"; // Blue for microphone
-        
-        // Event for transcription results
+        private readonly string subscriptionKey;
+        private readonly string region;
+        private ConversationTranscriber recognizer;
+        private PushAudioInputStream pushStream;
+        private WaveInEvent waveIn;
+ 
+        private readonly string MicColor = "#4F6BED";
+
         public event EventHandler<TranscriptionEventArgs> TranscriptionReceived;
-        
-        public MicrophoneService(SpeechConfig speechConfig)
+        public event Action<string> ErrorOccurred;
+
+ 
+        public MicrophoneService(string subscriptionKey, string region)
         {
-            this.speechConfig = speechConfig;
+            this.subscriptionKey = subscriptionKey;
+            this.region = region;
         }
-        
-        public async Task SetDeviceAsync(MMDevice device)
+
+
+
+        public async Task StartRecordingAsync(int deviceIndex, CancellationToken cancellationToken)
         {
-            // Stop recording if active
-            if (isRecording)
-            {
-                await StopRecordingAsync();
-            }
-            
-            // Dispose of existing capture
-            microphoneCapture?.Dispose();
-            
-            // Set new device
-            currentDevice = device;
-            
-            // Initialize capture for new device
-            microphoneCapture = new WasapiCapture(device);
-            micBuffer = new BufferedWaveProvider(microphoneCapture.WaveFormat);
-            microphoneCapture.DataAvailable += MicrophoneCapture_DataAvailable;
-        }
-        
-        private void MicrophoneCapture_DataAvailable(object sender, WaveInEventArgs e)
-        {
-            if (isRecording)
-            {
-                micBuffer.AddSamples(e.Buffer, 0, e.BytesRecorded);
-            }
-        }
-        
-        public async Task StartRecordingAsync(CancellationToken cancellationToken)
-        {
-            if (microphoneCapture == null || currentDevice == null)
-            {
-                throw new InvalidOperationException("Microphone device not set");
-            }
-            
             try
             {
-                // Clear buffer
-                micBuffer.ClearBuffer();
+                var speechConfig = SpeechConfig.FromSubscription(subscriptionKey, region);
+                speechConfig.SpeechRecognitionLanguage = "en-US";
+                speechConfig.OutputFormat = OutputFormat.Detailed;
+                speechConfig.SetProperty("SpeechServiceResponse_SpeakerDiarizationEnabled", "true");
+                speechConfig.SetProperty(PropertyId.SpeechServiceResponse_DiarizeIntermediateResults, "true");
+
+                var audioFormat = AudioStreamFormat.GetWaveFormatPCM(16000, 16, 1);
+                pushStream = AudioInputStream.CreatePushStream(audioFormat);
+                var audioConfig = AudioConfig.FromStreamInput(pushStream);
+
+                recognizer = new ConversationTranscriber(speechConfig, audioConfig);
+
+                recognizer.Transcribed += (s, e) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Result.Text))
+                    {
+                        var json = e.Result.Properties.GetProperty(PropertyId.SpeechServiceResponse_JsonResult);
+                        ProcessTranscriptionResult(e.Result, json);
+                    }
+                };
+
+                recognizer.Canceled += (s, e) =>
+                {
+                    ErrorOccurred?.Invoke($"Canceled: {e.Reason} - {e.ErrorDetails}");
+                };
+
+                await recognizer.StartTranscribingAsync();
+
+                waveIn = new WaveInEvent
+                {
+                    DeviceNumber = deviceIndex,
+                    WaveFormat = new WaveFormat(16000, 16, 1)
+                };
+
+                // 🟢 For display only (safe)
+                var naudioDeviceName = WaveIn.GetCapabilities(deviceIndex).ProductName;
                 
-                // Start capture
-                microphoneCapture.StartRecording();
-                
-                // Start recognition
-                _ = Task.Run(() => StartRecognitionAsync(cancellationToken));
-                
-                isRecording = true;
+
+                waveIn.DataAvailable += (s, e) =>
+                {
+                    try
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                        {
+                            byte[] buffer = new byte[e.BytesRecorded];
+                            Array.Copy(e.Buffer, 0, buffer, 0, e.BytesRecorded);
+                            pushStream.Write(buffer);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorOccurred?.Invoke($"Audio Write Error: {ex.Message}");
+                    }
+                };
+
+                waveIn.StartRecording();
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to start microphone recording: {ex.Message}", ex);
+                ErrorOccurred?.Invoke($"Microphone Capture Error: {ex.Message}");
+                throw;
             }
         }
-        
+
+
         public async Task StopRecordingAsync()
         {
             try
             {
-                isRecording = false;
-                
-                // Stop capture
-                if (microphoneCapture != null && microphoneCapture.CaptureState == CaptureState.Capturing)
-                {
-                    microphoneCapture.StopRecording();
-                }
-                
-                // Stop recognizer
+                waveIn?.StopRecording();
+                waveIn?.Dispose();
+                waveIn = null;
+
+                pushStream?.Close();
+                pushStream = null;
+
                 if (recognizer != null)
                 {
-                    await recognizer.StopContinuousRecognitionAsync();
+                    await recognizer.StopTranscribingAsync();
+                    recognizer.Dispose();
+                    recognizer = null;
                 }
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to stop microphone recording: {ex.Message}", ex);
+                ErrorOccurred?.Invoke($"Error stopping microphone recording: {ex.Message}");
+                throw;
             }
         }
-        
-        private async Task StartRecognitionAsync(CancellationToken cancellationToken)
+
+        private void ProcessTranscriptionResult(ConversationTranscriptionResult result, string jsonResult)
         {
             try
             {
-                // Create an audio stream from the microphone buffer
-                var audioInputStream = AudioInputStream.CreatePushStream(AudioStreamFormat.GetWaveFormatPCM(
-                    (uint)microphoneCapture.WaveFormat.SampleRate,
-                    (byte)microphoneCapture.WaveFormat.BitsPerSample,
-                    (byte)microphoneCapture.WaveFormat.Channels));
-                
-                // Create audio config from the stream
-                var audioConfig = AudioConfig.FromStreamInput(audioInputStream);
-                
-                // Create speech recognizer
-                recognizer = new SpeechRecognizer(speechConfig, audioConfig);
-                
-                // Set up event handlers
-                recognizer.Recognized += (s, e) => {
-                    if (e.Result.Reason == ResultReason.RecognizedSpeech && !string.IsNullOrWhiteSpace(e.Result.Text))
-                    {
-                        ProcessRecognizedSpeech(e.Result.Text);
-                    }
-                };
-                
-                // Start continuous recognition
-                await recognizer.StartContinuousRecognitionAsync();
-                
-                // Process audio data in a loop
-                byte[] buffer = new byte[16000];
-                while (!cancellationToken.IsCancellationRequested && isRecording)
+                string speakerName = "Microphone";
+                string speakerInitials = "MIC";
+
+                if (!string.IsNullOrEmpty(jsonResult))
                 {
-                    int bytesRead = micBuffer.Read(buffer, 0, buffer.Length);
-                    if (bytesRead > 0)
+                    var json = JObject.Parse(jsonResult);
+                    if (json["NBest"] is JArray nBest && nBest.Count > 0)
                     {
-                        audioInputStream.Write(buffer, bytesRead);
+                        var firstResult = nBest[0];
+                        if (firstResult["Speaker"] != null)
+                        {
+                            var speakerId = firstResult["Speaker"].ToString();
+                            speakerName = $"Speaker {speakerId}";
+                            speakerInitials = $"S{speakerId}";
+                        }
                     }
-                    await Task.Delay(100, cancellationToken);
                 }
-                
-                // Stop recognition
-                await recognizer.StopContinuousRecognitionAsync();
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal cancellation, no need to handle
+
+                var entry = new TranscriptionEntry
+                {
+                    SpeakerName = speakerName,
+                    SpeakerInitials = speakerInitials,
+                    SpeakerColor = MicColor,
+                    Text = result.Text,
+                    Timestamp = DateTime.Now.ToString("h:mm:ss tt")
+                };
+
+                TranscriptionReceived?.Invoke(this, new TranscriptionEventArgs(entry));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in microphone recognition: {ex.Message}");
+                ErrorOccurred?.Invoke($"Error processing transcription result: {ex.Message}");
             }
         }
-        
-        private void ProcessRecognizedSpeech(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return;
-            
-            var entry = new TranscriptionEntry
-            {
-                SpeakerName = currentDevice?.FriendlyName ?? "Microphone",
-                SpeakerInitials = "MIC",
-                SpeakerColor = MicColor,
-                Text = text,
-                Timestamp = DateTime.Now.ToString("h:mm:ss tt")
-            };
-            
-            TranscriptionReceived?.Invoke(this, new TranscriptionEventArgs(entry));
-        }
-        
+
         public void Dispose()
         {
-            microphoneCapture?.Dispose();
+            StopRecordingAsync().Wait();
+            waveIn?.Dispose();
             recognizer?.Dispose();
+            pushStream?.Dispose();
         }
+              
+
     }
 }
-

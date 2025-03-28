@@ -15,11 +15,15 @@ using System.Collections.ObjectModel;
 using System.Threading;
 using System.Linq;
 using System.Windows.Forms;
+using System.Diagnostics;
 
 namespace MeetingTranscriptionApp
 {
     public partial class MainWindow : Window
     {
+        string subscriptionKey = "iMjcNbfY9mmvNEqVdIKyf6HeIJovQGn0G9S9yWzf6EMylyciNP1oJQQJ99BAACYeBjFXJ3w3AAAYACOGnIbK";
+        string subscriptionRegion = "eastus";
+
         private bool isRecording = false;
         private ObservableCollection<TranscriptionEntry> currentTranscription = new ObservableCollection<TranscriptionEntry>();
         
@@ -32,23 +36,25 @@ namespace MeetingTranscriptionApp
         private SpeakerService speakerService;
         
         // Cancellation tokens for async operations
-        private CancellationTokenSource micCts;
-        private CancellationTokenSource speakerCts;
+        private CancellationTokenSource recordingCts;
         
         // Audio source enabled states
         private bool microphoneEnabled = true;
         private bool speakerEnabled = true;
+        
+        // Recording start time for duration calculation
+        private Stopwatch recordingStopwatch = new Stopwatch();
 
         public MainWindow()
         {
             InitializeComponent();
-            InitializeWebView();
             
             // Initialize audio device manager
             audioDeviceManager = new AudioDeviceManager();
             
-            // Initialize Azure Speech Services when the window is loaded
+            // Initialize WebView and services when the window is loaded
             Loaded += async (s, e) => {
+                await InitializeWebViewAsync();
                 await InitializeSpeechServicesAsync();
                 PositionWindowOnStartup();
             };
@@ -80,7 +86,7 @@ namespace MeetingTranscriptionApp
             }
         }
 
-        private async void InitializeWebView()
+        private async Task InitializeWebViewAsync()
         {
             try
             {
@@ -89,8 +95,8 @@ namespace MeetingTranscriptionApp
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "MeetingTranscriptionApp");
                 
-                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
-                await webView.EnsureCoreWebView2Async(env);
+                //var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                await webView.EnsureCoreWebView2Async();
 
                 // Set up event handlers
                 webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
@@ -123,11 +129,10 @@ namespace MeetingTranscriptionApp
             {
                 // Initialize Azure Speech Services
                 // In a real app, these would be stored securely and not hardcoded
-                string speechKey = Environment.GetEnvironmentVariable("AZURE_SPEECH_KEY") ?? "YOUR_AZURE_SPEECH_KEY";
-                string speechRegion = Environment.GetEnvironmentVariable("AZURE_SPEECH_REGION") ?? "eastus";
+             
                 
                 // Create speech configuration
-                speechConfig = SpeechConfig.FromSubscription(speechKey, speechRegion);
+                speechConfig = SpeechConfig.FromSubscription(subscriptionKey, subscriptionRegion);
                 speechConfig.SpeechRecognitionLanguage = "en-US";
                 
                 // Initialize audio services
@@ -150,26 +155,30 @@ namespace MeetingTranscriptionApp
                 await audioDeviceManager.InitializeAsync();
                 
                 // Initialize microphone service
-                microphoneService = new MicrophoneService(speechConfig);
+                microphoneService = new MicrophoneService(subscriptionKey, subscriptionRegion);
                 microphoneService.TranscriptionReceived += OnTranscriptionReceived;
+                microphoneService.ErrorOccurred += (message) => {
+                    Dispatcher.InvokeAsync(() => {
+                        StatusText.Text = message;
+                    });
+                };
                 
                 // Initialize speaker service
-                speakerService = new SpeakerService(speechConfig);
+                speakerService = new SpeakerService(subscriptionKey, subscriptionRegion);
                 speakerService.TranscriptionReceived += OnTranscriptionReceived;
+                speakerService.ErrorOccurred += (message) => {
+                    Dispatcher.InvokeAsync(() => {
+                        StatusText.Text = message;
+                    });
+                };
                 
                 // Set default devices
                 var defaultMic = audioDeviceManager.GetDefaultMicrophone();
                 var defaultSpeaker = audioDeviceManager.GetDefaultSpeaker();
                 
-                if (defaultMic != null)
-                {
-                    await microphoneService.SetDeviceAsync(defaultMic);
-                }
+              
                 
-                if (defaultSpeaker != null)
-                {
-                    await speakerService.SetDeviceAsync(defaultSpeaker);
-                }
+                
                 
                 // Send audio devices to the web app
                 SendAudioDevicesToWebView();
@@ -185,13 +194,15 @@ namespace MeetingTranscriptionApp
 
         private void OnTranscriptionReceived(object sender, TranscriptionEventArgs e)
         {
-            Dispatcher.Invoke(() => {
+            // Use Dispatcher to update UI from a background thread
+            Dispatcher.InvokeAsync(() => {
                 currentTranscription.Add(e.Entry);
                 
                 // Send the transcription to the web app
                 SendTranscriptionToWebView(new List<TranscriptionEntry> { e.Entry });
             });
         }
+        int micIndex = 0;
 
         private async Task StartRecordingAsync()
         {
@@ -200,20 +211,47 @@ namespace MeetingTranscriptionApp
                 // Clear previous transcription
                 currentTranscription.Clear();
                 
-                // Create cancellation tokens
-                micCts = new CancellationTokenSource();
-                speakerCts = new CancellationTokenSource();
+                // Create a single cancellation token source for all recording operations
+                recordingCts = new CancellationTokenSource();
                 
                 // Start services based on enabled state
+                var startTasks = new List<Task>();
+                
                 if (microphoneEnabled)
                 {
-                    await microphoneService.StartRecordingAsync(micCts.Token);
+                    int? deviceIndex;
+
+                    if (!string.IsNullOrEmpty(selectedMic))
+                    {                    
+                        deviceIndex = audioDeviceManager.GetWaveInDeviceIndexById(selectedMic);
+                    }
+                    else
+                    {
+                    
+                        var defaultMic = audioDeviceManager.GetDefaultMicrophone();
+                        deviceIndex = audioDeviceManager.GetWaveInDeviceIndexById(defaultMic?.ID);
+                    }
+
+                    if (deviceIndex.HasValue)
+                    {
+                        startTasks.Add(microphoneService.StartRecordingAsync(deviceIndex.Value, recordingCts.Token));
+                    }
+                    
                 }
                 
                 if (speakerEnabled)
                 {
-                    await speakerService.StartRecordingAsync(speakerCts.Token);
+                    if (selectedSpeaker != null)
+                    {
+                        startTasks.Add(speakerService.StartRecordingAsync(recordingCts.Token, selectedSpeaker));
+                    }                 
                 }
+                
+                // Wait for all services to start
+                await Task.WhenAll(startTasks);
+                
+                // Start the stopwatch for duration tracking
+                recordingStopwatch.Restart();
                 
                 StatusText.Text = "Recording started";
             }
@@ -228,13 +266,20 @@ namespace MeetingTranscriptionApp
         {
             try
             {
-                // Cancel recognition tasks
-                micCts?.Cancel();
-                speakerCts?.Cancel();
+                // Stop the stopwatch
+                recordingStopwatch.Stop();
+                
+                // Cancel all recording operations
+                recordingCts?.Cancel();
                 
                 // Stop services
-                await microphoneService.StopRecordingAsync();
-                await speakerService.StopRecordingAsync();
+                var stopTasks = new List<Task>();
+                
+                stopTasks.Add(microphoneService.StopRecordingAsync());
+                stopTasks.Add(speakerService.StopRecordingAsync());
+                
+                // Wait for all services to stop
+                await Task.WhenAll(stopTasks);
                 
                 StatusText.Text = "Recording stopped";
                 
@@ -244,6 +289,12 @@ namespace MeetingTranscriptionApp
             catch (Exception ex)
             {
                 StatusText.Text = $"Error stopping recording: {ex.Message}";
+            }
+            finally
+            {
+                // Dispose the cancellation token source
+                recordingCts?.Dispose();
+                recordingCts = null;
             }
         }
 
@@ -318,6 +369,10 @@ namespace MeetingTranscriptionApp
         {
             try
             {
+                // Format the duration
+                TimeSpan duration = recordingStopwatch.Elapsed;
+                string formattedDuration = $"{(int)duration.TotalMinutes} minutes {duration.Seconds} seconds";
+                
                 // Create a new recording entry
                 var recording = new Recording
                 {
@@ -325,7 +380,7 @@ namespace MeetingTranscriptionApp
                     Title = $"Meeting {DateTime.Now:MMM d, yyyy}",
                     Date = DateTime.Now.ToString("MMMM d, yyyy"),
                     Time = DateTime.Now.ToString("h:mm tt"),
-                    Duration = "00:00", // Calculate actual duration
+                    Duration = formattedDuration,
                     Participants = 2, // Microphone and Speaker
                     Timestamp = DateTime.Now,
                     Transcript = currentTranscription.ToList()
@@ -407,6 +462,9 @@ namespace MeetingTranscriptionApp
             }
         }
 
+        string selectedSpeaker ;
+        string selectedMic;
+
         private async void SetAudioDeviceAsync(string deviceType, string deviceId)
         {
             try
@@ -416,17 +474,17 @@ namespace MeetingTranscriptionApp
                     var device = audioDeviceManager.GetMicrophoneById(deviceId);
                     if (device != null)
                     {
-                        await microphoneService.SetDeviceAsync(device);
                         StatusText.Text = $"Microphone set to: {device.FriendlyName}";
+                        selectedMic = deviceId;
                     }
                 }
                 else if (deviceType == "speaker")
                 {
                     var device = audioDeviceManager.GetSpeakerById(deviceId);
                     if (device != null)
-                    {
-                        await speakerService.SetDeviceAsync(device);
+                    {                      
                         StatusText.Text = $"Speaker set to: {device.FriendlyName}";
+                        selectedSpeaker = deviceId;
                     }
                 }
             }

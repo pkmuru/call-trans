@@ -90,8 +90,7 @@
             </Grid>
 
             <!-- WebView2 Control -->
-            <wv2:WebView2 x:Name="webView" Grid.Row="1" Source="http://localhost:3000" 
-                          WebMessageReceived="WebView_WebMessageReceived"/>
+            <wv2:WebView2 x:Name="webView" Grid.Row="1" Source="http://localhost:3000"/>
 
             <!-- Status Bar -->
             <Grid Grid.Row="2" Background="#F3F3F3" Height="24">

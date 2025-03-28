@@ -1,10 +1,16 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { Text, Subtitle1, Divider, Select, Option, Switch, Card, CardHeader, Button } from "@fluentui/react-components"
-import { MicRegular, VolumeRegular, InfoRegular, ArrowSyncRegular } from "@fluentui/react-icons"
+import { useState, useEffect, useRef } from "react"
+import { Text, Subtitle1, Divider, Switch, Card, CardHeader, Button, Select } from "@fluentui/react-components"
+import { MicRegular, InfoRegular, ArrowSyncRegular, SettingsRegular } from "@fluentui/react-icons"
 import { WebViewCommunicator } from "@/utils/webview-communicator"
 import type { AudioDevice } from "@/types"
+
+// Local storage keys
+const STORAGE_KEY_MIC = "meeting-transcription-mic-id"
+const STORAGE_KEY_SPEAKER = "meeting-transcription-speaker-id"
+const STORAGE_KEY_MIC_ENABLED = "meeting-transcription-mic-enabled"
+const STORAGE_KEY_SPEAKER_ENABLED = "meeting-transcription-speaker-enabled"
 
 interface SettingsViewProps {
   audioDevices: {
@@ -16,23 +22,139 @@ interface SettingsViewProps {
 }
 
 export default function SettingsView({ audioDevices, onDeviceSelect, onSourceToggle }: SettingsViewProps) {
-  const [micEnabled, setMicEnabled] = useState(true)
-  const [speakerEnabled, setSpeakerEnabled] = useState(true)
-  const [selectedMic, setSelectedMic] = useState<string>("")
-  const [selectedSpeaker, setSelectedSpeaker] = useState<string>("")
+  // Refs to track previous values and prevent loops
+  const initializedRef = useRef(false)
+  const prevMicIdRef = useRef<string | null>(null)
+  const prevSpeakerIdRef = useRef<string | null>(null)
+
+  const [micEnabled, setMicEnabled] = useState(() => {
+    // Initialize from localStorage or default to true
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(STORAGE_KEY_MIC_ENABLED)
+      return saved !== null ? saved === "true" : true
+    }
+    return true
+  })
+
+  const [speakerEnabled, setSpeakerEnabled] = useState(() => {
+    // Initialize from localStorage or default to true
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(STORAGE_KEY_SPEAKER_ENABLED)
+      return saved !== null ? saved === "true" : true
+    }
+    return true
+  })
+
+  const [selectedMic, setSelectedMic] = useState<string>(() => {
+    // Initialize from localStorage or empty string
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(STORAGE_KEY_MIC) || ""
+    }
+    return ""
+  })
+
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string>(() => {
+    // Initialize from localStorage or empty string
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(STORAGE_KEY_SPEAKER) || ""
+    }
+    return ""
+  })
+
+  // Initialize devices only once when component mounts or when devices change
+  useEffect(() => {
+    // Skip if no devices available
+    if (audioDevices.microphones.length === 0 && audioDevices.speakers.length === 0) {
+      return
+    }
+
+    // Only run initialization once
+    if (!initializedRef.current) {
+      let shouldUpdateMic = false
+      let shouldUpdateSpeaker = false
+      let micToUse = selectedMic
+      let speakerToUse = selectedSpeaker
+
+      // For microphone
+      if (audioDevices.microphones.length > 0) {
+        // If we have a saved selection, check if it's still available
+        if (selectedMic) {
+          const deviceExists = audioDevices.microphones.some((mic) => mic.id === selectedMic)
+          if (!deviceExists) {
+            // If saved device is no longer available, use default or first available
+            const defaultMic = audioDevices.microphones.find((mic) => mic.isDefault)
+            micToUse = defaultMic?.id || audioDevices.microphones[0].id
+            shouldUpdateMic = true
+          }
+        } else {
+          // No selection yet, use default or first available
+          const defaultMic = audioDevices.microphones.find((mic) => mic.isDefault)
+          micToUse = defaultMic?.id || audioDevices.microphones[0].id
+          shouldUpdateMic = true
+        }
+      }
+
+      // For speaker
+      if (audioDevices.speakers.length > 0) {
+        // If we have a saved selection, check if it's still available
+        if (selectedSpeaker) {
+          const deviceExists = audioDevices.speakers.some((speaker) => speaker.id === selectedSpeaker)
+          if (!deviceExists) {
+            // If saved device is no longer available, use default or first available
+            const defaultSpeaker = audioDevices.speakers.find((speaker) => speaker.isDefault)
+            speakerToUse = defaultSpeaker?.id || audioDevices.speakers[0].id
+            shouldUpdateSpeaker = true
+          }
+        } else {
+          // No selection yet, use default or first available
+          const defaultSpeaker = audioDevices.speakers.find((speaker) => speaker.isDefault)
+          speakerToUse = defaultSpeaker?.id || audioDevices.speakers[0].id
+          shouldUpdateSpeaker = true
+        }
+      }
+
+      // Update state and localStorage if needed
+      if (shouldUpdateMic) {
+        setSelectedMic(micToUse)
+        if (typeof window !== "undefined") {
+          localStorage.setItem(STORAGE_KEY_MIC, micToUse)
+        }
+      }
+
+      if (shouldUpdateSpeaker) {
+        setSelectedSpeaker(speakerToUse)
+        if (typeof window !== "undefined") {
+          localStorage.setItem(STORAGE_KEY_SPEAKER, speakerToUse)
+        }
+      }
+
+      // Notify parent component of initial device selections
+      if (micToUse && prevMicIdRef.current !== micToUse) {
+        onDeviceSelect("microphone", micToUse)
+        prevMicIdRef.current = micToUse
+      }
+
+      if (speakerToUse && prevSpeakerIdRef.current !== speakerToUse) {
+        onDeviceSelect("speaker", speakerToUse)
+        prevSpeakerIdRef.current = speakerToUse
+      }
+
+      initializedRef.current = true
+    }
+  }, [audioDevices, selectedMic, selectedSpeaker, onDeviceSelect])
+
+  // Save enabled states to localStorage when they change
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(STORAGE_KEY_MIC_ENABLED, micEnabled.toString())
+    }
+  }, [micEnabled])
 
   useEffect(() => {
-    // Set initial selected devices if available
-    if (audioDevices.microphones.length > 0 && !selectedMic) {
-      const defaultMic = audioDevices.microphones.find((mic) => mic.isDefault)
-      setSelectedMic(defaultMic?.id || audioDevices.microphones[0].id)
+    if (typeof window !== "undefined") {
+      localStorage.setItem(STORAGE_KEY_SPEAKER_ENABLED, speakerEnabled.toString())
     }
-
-    if (audioDevices.speakers.length > 0 && !selectedSpeaker) {
-      const defaultSpeaker = audioDevices.speakers.find((speaker) => speaker.isDefault)
-      setSelectedSpeaker(defaultSpeaker?.id || audioDevices.speakers[0].id)
-    }
-  }, [audioDevices, selectedMic, selectedSpeaker])
+  }, [speakerEnabled])
 
   const handleMicToggle = (checked: boolean) => {
     setMicEnabled(checked)
@@ -45,17 +167,35 @@ export default function SettingsView({ audioDevices, onDeviceSelect, onSourceTog
   }
 
   const handleMicSelect = (deviceId: string) => {
-    setSelectedMic(deviceId)
-    onDeviceSelect("microphone", deviceId)
+    if (deviceId !== selectedMic) {
+      setSelectedMic(deviceId)
+      onDeviceSelect("microphone", deviceId)
+      prevMicIdRef.current = deviceId
+
+      // Save to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem(STORAGE_KEY_MIC, deviceId)
+      }
+    }
   }
 
   const handleSpeakerSelect = (deviceId: string) => {
-    setSelectedSpeaker(deviceId)
-    onDeviceSelect("speaker", deviceId)
+    if (deviceId !== selectedSpeaker) {
+      setSelectedSpeaker(deviceId)
+      onDeviceSelect("speaker", deviceId)
+      prevSpeakerIdRef.current = deviceId
+
+      // Save to localStorage
+      if (typeof window !== "undefined") {
+        localStorage.setItem(STORAGE_KEY_SPEAKER, deviceId)
+      }
+    }
   }
 
   const refreshDevices = () => {
     WebViewCommunicator.requestAudioDevices()
+    // Reset initialization flag to allow re-initialization with new devices
+    initializedRef.current = false
   }
 
   return (
@@ -99,15 +239,11 @@ export default function SettingsView({ audioDevices, onDeviceSelect, onSourceTog
                 onChange={(e, data) => handleMicSelect(data.value as string)}
               >
                 {audioDevices.microphones.map((mic) => (
-                  <Option key={mic.id} value={mic.id} text={mic.name}>
+                  <option key={mic.id} value={mic.id}>
                     {mic.name} {mic.isDefault && "(Default)"}
-                  </Option>
+                  </option>
                 ))}
-                {audioDevices.microphones.length === 0 && (
-                  <Option value="none" text="No microphones found">
-                    No microphones found
-                  </Option>
-                )}
+                {audioDevices.microphones.length === 0 && <option value="none">No microphones found</option>}
               </Select>
             </div>
 
@@ -124,7 +260,7 @@ export default function SettingsView({ audioDevices, onDeviceSelect, onSourceTog
           <CardHeader
             header={
               <div style={{ display: "flex", alignItems: "center" }}>
-                <VolumeRegular style={{ marginRight: "8px" }} />
+                <SettingsRegular style={{ marginRight: "8px" }} />
                 <Text weight="semibold">System Audio Output</Text>
               </div>
             }
@@ -147,15 +283,11 @@ export default function SettingsView({ audioDevices, onDeviceSelect, onSourceTog
                 onChange={(e, data) => handleSpeakerSelect(data.value as string)}
               >
                 {audioDevices.speakers.map((speaker) => (
-                  <Option key={speaker.id} value={speaker.id} text={speaker.name}>
+                  <option key={speaker.id} value={speaker.id}>
                     {speaker.name} {speaker.isDefault && "(Default)"}
-                  </Option>
+                  </option>
                 ))}
-                {audioDevices.speakers.length === 0 && (
-                  <Option value="none" text="No speakers found">
-                    No speakers found
-                  </Option>
-                )}
+                {audioDevices.speakers.length === 0 && <option value="none">No speakers found</option>}
               </Select>
             </div>
 

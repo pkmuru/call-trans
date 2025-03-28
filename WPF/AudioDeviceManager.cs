@@ -1,4 +1,5 @@
 using NAudio.CoreAudioApi;
+using NAudio.Wave;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -107,7 +108,24 @@ namespace MeetingTranscriptionApp
             var speaker = speakers.FirstOrDefault(s => s.Id == deviceId);
             return speaker?.Device;
         }
-        
+
+        public int? GetWaveInDeviceIndexById(string deviceId)
+        {
+            var mic = GetMicrophoneById(deviceId);
+            if (mic == null) return null;
+
+            for (int i = 0; i < WaveIn.DeviceCount; i++)
+            {
+                var cap = WaveIn.GetCapabilities(i);
+                if (mic.FriendlyName.Contains(cap.ProductName, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return null;
+        }
+
         public void Dispose()
         {
             deviceEnumerator?.Dispose();
